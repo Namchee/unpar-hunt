@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -11,13 +12,13 @@ import (
 	"github.com/gocolly/colly"
 )
 
-type MataKuliah struct {
+type mataKuliah struct {
 	Kode  string `json:"kode"`
 	Nama  string `json:"nama"`
 	Kelas string `json:"kelas"`
 }
 
-type RiwayatTOEFL struct {
+type riwayatTOEFL struct {
 	Listening int       `json:"listening"`
 	Structure int       `json:"structure"`
 	Reading   int       `json:"reading"`
@@ -25,15 +26,20 @@ type RiwayatTOEFL struct {
 	Tanggal   time.Time `json:"tanggal"`
 }
 
-type Mahasiswa struct {
-	Npm          string         `json:"npm"`
-	Foto         string         `json:"photo"`
-	Nama         string         `json:"nama"`
-	MataKuliah   []MataKuliah   `json:"mataKuliah"`
-	RiwayatTOEFL []RiwayatTOEFL `json:"riwayatTOEFL"`
+type informasiIde struct {
+	Npm        string       `json:"npm"`
+	Foto       string       `json:"photo"`
+	Nama       string       `json:"nama"`
+	MataKuliah []mataKuliah `json:"mataKuliah"`
 }
 
-func scrapIde(baseCollector colly.Collector, id string) (Mahasiswa, error) {
+type Mahasiswa struct {
+	informasiIde
+	RiwayatTOEFL []riwayatTOEFL `json:"riwayatTOEFL"`
+}
+
+// Scrap basic student data from IDE
+func scrapIde(baseCollector colly.Collector, id string) (informasiIde, error) {
 	ideCollector := baseCollector.Clone()
 
 	ideCollector.AllowedDomains = []string{
@@ -42,7 +48,7 @@ func scrapIde(baseCollector colly.Collector, id string) (Mahasiswa, error) {
 	}
 
 	var err error
-	var result Mahasiswa
+	var result informasiIde
 
 	ideCollector.OnError(func(_ *colly.Response, erro error) {
 		err = erro
@@ -76,7 +82,7 @@ func scrapIde(baseCollector colly.Collector, id string) (Mahasiswa, error) {
 		text := e.ChildText("a")
 		textSplit := strings.Split(text, " ")
 
-		mataKuliah := MataKuliah{
+		mataKuliah := mataKuliah{
 			textSplit[0:1][0],
 			strings.Join(textSplit[1:len(textSplit)-1], " "),
 			textSplit[len(textSplit)-1:][0],
@@ -92,8 +98,8 @@ func scrapIde(baseCollector colly.Collector, id string) (Mahasiswa, error) {
 	return result, err
 }
 
-func scrapTOEFL(baseCollector colly.Collector, id string) ([]RiwayatTOEFL, error) {
-
+// Scrap TOEFL history from UNPAR's CDC website
+func scrapTOEFL(baseCollector colly.Collector, id string) ([]riwayatTOEFL, error) {
 	toeflCollector := baseCollector.Clone()
 
 	toeflCollector.AllowedDomains = []string{
@@ -101,7 +107,7 @@ func scrapTOEFL(baseCollector colly.Collector, id string) ([]RiwayatTOEFL, error
 	}
 
 	var err error
-	var result []RiwayatTOEFL
+	var result []riwayatTOEFL
 
 	toeflCollector.OnHTML("table tbody", func(e *colly.HTMLElement) {
 		e.ForEach("tr", func(idx int, el *colly.HTMLElement) {
@@ -115,7 +121,7 @@ func scrapTOEFL(baseCollector colly.Collector, id string) ([]RiwayatTOEFL, error
 				if errL == nil {
 					result = append(
 						result,
-						RiwayatTOEFL{
+						riwayatTOEFL{
 							listening,
 							structure,
 							reading,
@@ -139,7 +145,7 @@ func scrapTOEFL(baseCollector colly.Collector, id string) ([]RiwayatTOEFL, error
 	return result, err
 }
 
-func main() {
+func ScrapData(id string) (Mahasiswa, error) {
 	// initalize base collector
 	baseCollector := colly.NewCollector(
 		colly.MaxDepth(1),
@@ -148,23 +154,37 @@ func main() {
 	// masquerade as a normal user
 	baseCollector.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36"
 
-	ideData, err := scrapIde(*baseCollector, "2016730011")
+	ideData, errIde := scrapIde(*baseCollector, id)
+	toeflData, errToefl := scrapTOEFL(*baseCollector, id)
 
-	if err == nil && len(ideData.Npm) > 0 {
-		toeflData, erro := scrapTOEFL(*baseCollector, "2016730011")
-
-		if erro == nil {
-			ideData.RiwayatTOEFL = toeflData
-		}
-	} else {
-		fmt.Println(err)
-		os.Exit(1)
+	if errIde != nil {
+		return Mahasiswa{}, errIde
 	}
 
-	jsonForm, err := json.Marshal(ideData)
+	if errToefl != nil {
+		return Mahasiswa{}, errToefl
+	}
+
+	return Mahasiswa{ideData, toeflData}, nil
+}
+
+func main() {
+	args := os.Args[1:]
+
+	if len(args) == 0 {
+		log.Fatal("IDK where the hell should I scrap the data from...")
+	}
+
+	data, errData := ScrapData(args[0])
+
+	if errData != nil {
+		log.Fatalln(errData)
+	}
+
+	jsonForm, err := json.MarshalIndent(data, "", "  ")
+
 	if err != nil {
-		fmt.Println(err)
-		return
+		log.Fatal(err)
 	}
 
 	fmt.Println(string(jsonForm))
